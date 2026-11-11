@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Single quality gate. Run after every epic.
 set -euo pipefail
+export BRAIN_INDEX_BUILD=1 # always test the local Rust source, never a downloaded binary
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 stage() { printf '\n[qa/%s] %s\n' "$1" "$2"; }
 crate=native/brain_index_nif/Cargo.toml

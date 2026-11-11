@@ -1,7 +1,20 @@
 # BrainIndex
 
 An embedded vector index with exact metadata filters for Elixir, written in Rust and loaded as a
-NIF. It is the retrieval core of the company brain. Internal package, not published.
+NIF. It is the retrieval core of the company brain.
+
+## Installation
+
+Not on Hex. Precompiled NIFs (macOS, Linux gnu/musl, Windows; arm64/x86_64) download from GitHub
+releases, so no Rust toolchain is needed (ADR013):
+
+```elixir
+{:brain_index, github: "mindreframer/brain_index", tag: "v0.5.0"}
+```
+
+Set `BRAIN_INDEX_BUILD=1` to build from source.
+
+## Usage
 
 ```elixir
 {:ok, index} = BrainIndex.open("/var/lib/brain", dim: 768)     # LMDB on disk; reopen = instant recovery

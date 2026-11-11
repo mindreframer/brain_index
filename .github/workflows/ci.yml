@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["**.md", "LICENSE", "@meta/**"]
+  pull_request:
+    branches: [main]
+    paths-ignore: ["**.md", "LICENSE", "@meta/**"]
+
+env:
+  MIX_ENV: test
+  RUST_BACKTRACE: 1
+  BRAIN_INDEX_BUILD: "1" # build the NIF from source in CI
+
+jobs:
+  test:
+    name: QA (Elixir 1.18 / OTP 27)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18"
+          otp-version: "27"
+
+      - uses: dtolnay/rust-toolchain@1.91.0
+        with:
+          components: rustfmt, clippy
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: deps-${{ runner.os }}-${{ hashFiles('mix.lock') }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: v0-ci
+          workspaces: native/brain_index_nif
+
+      - run: mix deps.get
+      - run: bin/qa_check.sh

@@ -1,0 +1,98 @@
+name: NIF Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "native/**"
+      - "rust-toolchain.toml"
+      - ".github/workflows/nif-release.yml"
+    tags:
+      - "nif-v*"
+  pull_request:
+    paths:
+      - "native/**"
+      - "rust-toolchain.toml"
+      - ".github/workflows/nif-release.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build NIF for ${{ matrix.job.target }}
+    runs-on: ${{ matrix.job.os }}
+    timeout-minutes: 60
+
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        job:
+          # macOS
+          - { target: aarch64-apple-darwin, os: macos-15 }
+          - { target: x86_64-apple-darwin, os: macos-15-intel }
+
+          # Linux GNU
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-24.04, use-cross: true }
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-24.04 }
+
+          # Linux musl
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-24.04, use-cross: true }
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-24.04, use-cross: true }
+
+          # Windows
+          - { target: x86_64-pc-windows-msvc, os: windows-2022 }
+          - { target: x86_64-pc-windows-gnu, os: windows-2022 }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.91.0
+
+      - name: Extract version from mix.exs
+        shell: bash
+        run: |
+          echo "PROJECT_VERSION=$(sed -n 's/^  @version "\(.*\)"/\1/p' mix.exs | head -n1)" >> $GITHUB_ENV
+
+      - name: Add Rust target
+        shell: bash
+        run: rustup target add ${{ matrix.job.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: v0-precomp
+          shared-key: ${{ matrix.job.target }}-${{ matrix.job.os }}
+          workspaces: native/brain_index_nif
+
+      - name: Build NIF
+        id: build-crate
+        uses: philss/rustler-precompiled-action@v1.1.4
+        with:
+          project-name: brain_index_nif
+          project-version: ${{ env.PROJECT_VERSION }}
+          target: ${{ matrix.job.target }}
+          nif-version: "2.15"
+          use-cross: ${{ matrix.job.use-cross }}
+          project-dir: native/brain_index_nif
+
+      - name: Artifact attestation
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: ${{ steps.build-crate.outputs.file-path }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.build-crate.outputs.file-name }}
+          path: ${{ steps.build-crate.outputs.file-path }}
+
+      - name: Publish to GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            ${{ steps.build-crate.outputs.file-path }}

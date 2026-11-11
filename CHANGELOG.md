@@ -2,6 +2,8 @@
 
 ## 0.5.0 — 2026-11-11
 
+- Precompiled NIFs from GitHub releases via RustlerPrecompiled (ADR013); `BRAIN_INDEX_BUILD=1`
+  builds from source.
 - `BrainIndex.Shipper` (ADR012): ship, list, latest, prune and restore backups over the optional
   `objectstorex` dependency (S3, GCS, Azure, or a local folder as a bucket).
 
