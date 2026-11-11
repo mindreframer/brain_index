@@ -1,7 +1,7 @@
 defmodule BrainIndex.MixProject do
   use Mix.Project
 
-  @version "0.4.0"
+  @version "0.5.0"
 
   def project do
     [
@@ -21,6 +21,10 @@ defmodule BrainIndex.MixProject do
   def application, do: [extra_applications: [:logger]]
 
   defp deps do
-    [{:rustler, "== 0.38.0", runtime: false}]
+    [
+      {:rustler, "== 0.38.0", runtime: false, override: true},
+      # Optional: only `BrainIndex.Shipper` (ADR012) needs it.
+      {:objectstorex, "~> 0.3.0", optional: true}
+    ]
   end
 end

@@ -15,7 +15,7 @@ Read `@meta/@adr/` before changing behaviour. A behaviour change needs an ADR (n
 ## Code
 
 - Least abstraction that solves the current problem. No speculative features.
-- Rust dependencies: `rustler`, `heed` (ADR009). Elixir dependencies: `rustler`. Adding one needs an ADR.
+- Rust dependencies: `rustler`, `heed` (ADR009). Elixir dependencies: `rustler`, optional `objectstorex` (ADR012). Adding one needs an ADR.
 - Oracle fixtures (`test/fixtures`) define correctness: recall thresholds in ROADMAP001 §4 must hold.
 - Tests must stay fast (full suite < 10 s after compile). No sleeps, no network.
 - `BrainIndex.Native` is private; the public API is `BrainIndex`.

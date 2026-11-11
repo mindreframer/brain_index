@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.0 — 2026-11-11
+
+- `BrainIndex.Shipper` (ADR012): ship, list, latest, prune and restore backups over the optional
+  `objectstorex` dependency (S3, GCS, Azure, or a local folder as a bucket).
+
 ## 0.4.0 — 2026-11-11
 
 - `compact/3` (ADR011): rebuilds the live vectors, metadata and payloads into a new directory and
