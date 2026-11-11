@@ -7,14 +7,14 @@ pub fn dot(a: &[f32], b: &[f32]) -> f32 {
     debug_assert_eq!(a.len(), b.len());
     #[cfg(target_arch = "aarch64")]
     {
-        // SAFETY: NEON is mandatory on aarch64.
-        unsafe { dot_neon(a, b) }
+        // SAFETY: NEON is mandatory on aarch64; lengths checked by the caller contract.
+        unsafe { dot_neon(a.as_ptr(), b.as_ptr(), a.len().min(b.len())) }
     }
     #[cfg(target_arch = "x86_64")]
     {
         if avx2_fma() {
             // SAFETY: guarded by runtime feature detection.
-            return unsafe { dot_avx2(a, b) };
+            return unsafe { dot_avx2(a.as_ptr(), b.as_ptr(), a.len().min(b.len())) };
         }
         dot_scalar(a, b)
     }
@@ -24,6 +24,39 @@ pub fn dot(a: &[f32], b: &[f32]) -> f32 {
     }
 }
 
+/// Dot product of `a` with f32s stored little-endian in `b` (`b.len() == 4 * a.len()`), read with
+/// unaligned loads straight from the LMDB memory map (ADR009).
+#[inline]
+pub fn dot_bytes(a: &[f32], b: &[u8]) -> f32 {
+    assert_eq!(b.len(), a.len() * 4, "vector byte length mismatch");
+    #[cfg(target_arch = "aarch64")]
+    {
+        // SAFETY: NEON is mandatory on aarch64; vld1q_f32 tolerates unaligned addresses and the
+        // assert above guarantees b covers a.len() f32s.
+        unsafe { dot_neon(a.as_ptr(), b.as_ptr() as *const f32, a.len()) }
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+        if avx2_fma() {
+            // SAFETY: feature-detected; loadu tolerates unaligned addresses; length asserted.
+            return unsafe { dot_avx2(a.as_ptr(), b.as_ptr() as *const f32, a.len()) };
+        }
+        dot_bytes_scalar(a, b)
+    }
+    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
+    {
+        dot_bytes_scalar(a, b)
+    }
+}
+
+#[inline]
+pub fn dot_bytes_scalar(a: &[f32], b: &[u8]) -> f32 {
+    a.iter()
+        .zip(b.chunks_exact(4))
+        .map(|(x, c)| x * f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .sum()
+}
+
 #[inline]
 pub fn dot_scalar(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b).map(|(x, y)| x * y).sum()
@@ -31,10 +64,8 @@ pub fn dot_scalar(a: &[f32], b: &[f32]) -> f32 {
 
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
-unsafe fn dot_neon(a: &[f32], b: &[f32]) -> f32 {
+unsafe fn dot_neon(pa: *const f32, pb: *const f32, n: usize) -> f32 {
     use std::arch::aarch64::*;
-    let n = a.len().min(b.len());
-    let (pa, pb) = (a.as_ptr(), b.as_ptr());
     let mut acc = [vdupq_n_f32(0.0); 4];
     let mut i = 0;
     while i + 16 <= n {
@@ -53,7 +84,7 @@ unsafe fn dot_neon(a: &[f32], b: &[f32]) -> f32 {
         vaddq_f32(acc[2], acc[3]),
     ));
     while i < n {
-        sum += *pa.add(i) * *pb.add(i);
+        sum += pa.add(i).read_unaligned() * pb.add(i).read_unaligned();
         i += 1;
     }
     sum
@@ -68,10 +99,8 @@ fn avx2_fma() -> bool {
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
-unsafe fn dot_avx2(a: &[f32], b: &[f32]) -> f32 {
+unsafe fn dot_avx2(pa: *const f32, pb: *const f32, n: usize) -> f32 {
     use std::arch::x86_64::*;
-    let n = a.len().min(b.len());
-    let (pa, pb) = (a.as_ptr(), b.as_ptr());
     let mut acc = [_mm256_setzero_ps(); 4];
     let mut i = 0;
     while i + 32 <= n {
@@ -98,7 +127,7 @@ unsafe fn dot_avx2(a: &[f32], b: &[f32]) -> f32 {
     _mm256_storeu_ps(lanes.as_mut_ptr(), s);
     let mut sum: f32 = lanes.iter().sum();
     while i < n {
-        sum += *pa.add(i) * *pb.add(i);
+        sum += pa.add(i).read_unaligned() * pb.add(i).read_unaligned();
         i += 1;
     }
     sum
@@ -119,6 +148,14 @@ mod tests {
             assert!(
                 (fast - slow).abs() <= 1e-5 * slow.abs().max(1.0),
                 "n={n}: {fast} vs {slow}"
+            );
+            // Same values through the byte path, deliberately misaligned by one byte.
+            let mut raw = vec![0u8];
+            raw.extend(b.iter().flat_map(|x| x.to_le_bytes()));
+            let via_bytes = dot_bytes(&a, &raw[1..]);
+            assert!(
+                (via_bytes - slow).abs() <= 1e-5 * slow.abs().max(1.0),
+                "bytes n={n}"
             );
         }
     }

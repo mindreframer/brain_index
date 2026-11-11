@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0 — 2026-11-11
+
+- **LMDB storage engine** (ADR009): disk-resident, incremental commits, instant recovery; replaces
+  snapshots, the WAL and `BrainIndex.Collection` (removed).
+- `BrainIndex.open/2` (idempotent per directory), `new/1` = temporary index.
+- Payloads stored atomically with vectors (ADR010): `insert/5`, `search(payload: true)`, `get_payload/2`.
+- `backup/2`: consistent compacted online copy.
+- Unaligned SIMD kernels reading straight from the memory map.
+
 ## 0.2.0 — 2026-11-11
 
 - `BrainIndex.Collection`: durable, supervised index with a write-ahead log (ADR007).

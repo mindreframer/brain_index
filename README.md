@@ -4,55 +4,42 @@ An embedded vector index with exact metadata filters for Elixir, written in Rust
 NIF. It is the retrieval core of the company brain. Internal package, not published.
 
 ```elixir
-{:ok, index} = BrainIndex.new(dim: 768, metric: :cosine)
+{:ok, index} = BrainIndex.open("/var/lib/brain", dim: 768)     # LMDB on disk; reopen = instant recovery
 
 :ok =
   BrainIndex.insert_many(index, [
-    {1, embedding_1, %{"kind" => "kb", "lang" => "de"}},
-    {2, embedding_2, %{"kind" => "outreach", "performance" => "good"}}
-  ])
+    {1, embedding_1, %{"kind" => "kb", "lang" => "de"}, chunk_text_1},
+    {2, embedding_2, %{"kind" => "outreach", "performance" => "good"}, chunk_text_2}
+  ])                                                          # one transaction, durable on return
 
-{:ok, hits} = BrainIndex.search(index, query, 5, filter: %{"kind" => ["kb", "ticket"]})
-# => [{1, 0.1234}, ...]   {id, distance}, nearest first
+{:ok, hits} = BrainIndex.search(index, query, 5, filter: %{"kind" => ["kb", "ticket"]}, payload: true)
+# => [{1, 0.1234, chunk_text_1}, ...]   {id, distance, payload}, nearest first
 
 {:ok, true} = BrainIndex.delete(index, 2)
-:ok = BrainIndex.save(index, "brain.brix")
-{:ok, index} = BrainIndex.load("brain.brix")
+:ok = BrainIndex.backup(index, "/backups/brain-2026-11-11")     # consistent online copy
 BrainIndex.info(index)
 # => %{dim: 768, metric: :cosine, size: 1, deleted: 1, m: 16, ef_construction: 200}
+
+{:ok, scratch} = BrainIndex.new(dim: 768)                       # temporary index for tests
 ```
 
-## Durable collections (write-ahead log)
+## Storage: LMDB, on disk, incremental
 
-For data that must survive crashes, run a supervised `BrainIndex.Collection`. Configure it once:
-
-```elixir
-children = [
-  {BrainIndex.Collection,
-   name: :brain, dim: 768, storage: {BrainIndex.Storage.File, dir: "/var/lib/brain"}}
-]
-
-:ok = BrainIndex.Collection.upsert_many(:brain, [{1, embedding, %{"kind" => "kb"}}])  # durable on return
-{:ok, hits} = BrainIndex.Collection.search(:brain, query, 5, filter: %{"kind" => "kb"})
-```
-
-- Each write is applied, appended to a CRC-framed log, synced to disk with `datasync`, and only
-  then acknowledged. Batches (`upsert_many`) cost one sync.
-- Searches never wait for the collection process.
-- Checkpoints run automatically when the log passes 256 MiB. Old segments and checkpoints are
-  deleted.
-- Recovery runs automatically on start: newest checkpoint plus log replay. A record torn by a
-  crash is repaired; real corruption fails loudly.
-- For tests, use `{BrainIndex.Storage.Memory, agent: agent}`. To build your own backend,
-  implement `BrainIndex.Storage`.
+- Vectors, HNSW links, metadata and payloads live in one LMDB environment (ADR009).
+- Each write call is a single transaction. It writes **only the pages that changed** and then
+  fsyncs. There are no snapshots, no WAL and no periodic full rewrites.
+- **The data doesn't need to fit in RAM.** Searches read straight from the memory map, and the
+  kernel keeps hot pages cached. In RAM: the page cache plus filter bitsets (1 bit per node per
+  distinct metadata pair).
+- After a crash the index is exactly the last committed state. Recovery takes no time and there
+  is nothing to replay. A `SIGKILL` test checks that every acknowledged write survives.
 
 ## What it does, and what it doesn't
 
 | BrainIndex owns | Your application owns |
 |---|---|
-| vectors, HNSW search, exact metadata filters | embeddings (e.g. Bumblebee + multilingual-e5) |
-| upsert / delete | documents, chunk text, payloads |
-| write-ahead log, checkpoints, crash recovery | the system of record (documents) |
+| vectors, HNSW search, exact metadata filters, payloads | embeddings (e.g. Bumblebee + multilingual-e5) |
+| upsert / delete, durable commits, backups | the original documents / system of record |
 | concurrency-safe access from any process | retrieval policy per agent, multi-node distribution |
 
 - **Metrics:** `:cosine` (normalised; distance `1 - cos`) and `:lorentz` (hyperbolic, time component
@@ -62,12 +49,11 @@ children = [
   force, so they never lose recall. Use low-cardinality keys (kind, lang, performance, tenant),
   not unique ids.
 - **Concurrency:** searches run in parallel. Writes take an exclusive lock, so batch them with
-  `insert_many`. Heavy calls run on dirty schedulers.
+  `insert_many` (one commit per batch). Heavy calls run on dirty schedulers.
 - **Errors:** always `{:error, %BrainIndex.Error{reason: atom}}`. A native panic becomes
   `:internal` and never crashes the VM.
-- **Persistence:** `BrainIndex.Collection` with a write-ahead log (ADR007), or manual `save` /
-  `load` snapshots for plain indexes. Quantization, S3 shipping and replication are deferred, with
-  a design path in ADR008.
+- **Persistence:** LMDB (ADR009). Quantization, S3 shipping and replication are deferred, with a
+  design path in ADR008. A backup directory is the S3 unit.
 
 ## Quality
 
@@ -92,7 +78,7 @@ MIX_ENV=prod mix run bench/bench.exs    # benchmark
 ```
 
 Requires Elixir ≥ 1.18 and Rust 1.91 (pinned in `rust-toolchain.toml`). The only dependency is
-`rustler`, in both Elixir and Rust.
+`rustler` (Elixir) and `rustler` + `heed`/LMDB (Rust, ADR009).
 
-Design decisions are in `@meta/@adr` (ADR001–ADR008). The roadmap is in `@meta/@pm`. Read
+Design decisions are in `@meta/@adr` (ADR001–ADR010). The roadmap is in `@meta/@pm`. Read
 `AGENTS.md` before changing anything.

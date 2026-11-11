@@ -1,6 +1,6 @@
 # ADR007: Write-Ahead Log with Checkpoints
 
-- Status: Accepted (amends ADR005 and ADR006)
+- Status: Superseded by ADR009
 - Date: 2026-11-11
 - Decision owners: BrainIndex maintainers
 

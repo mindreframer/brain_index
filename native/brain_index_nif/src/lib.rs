@@ -1,5 +1,5 @@
 //! BrainIndex native core. Design decisions live in `@meta/@adr`; this file is the NIF boundary
-//! (ADR006): decode inputs, take the lock, contain panics, encode tagged results.
+//! (ADR006): decode inputs, contain panics, encode tagged results. Storage is LMDB (ADR009).
 
 pub mod bitset;
 pub mod error;
@@ -7,22 +7,27 @@ pub mod hnsw;
 pub mod index;
 pub mod metric;
 pub mod simd;
-pub mod snapshot;
+pub mod store;
 pub mod topk;
 
 use error::Error;
-use index::{Index, SearchOpts};
+use index::{Config, Index, SearchOpts};
 use metric::Metric;
 use rustler::{Atom, Binary, Encoder, Env, NewBinary, ResourceArc, Term};
+use std::collections::HashMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::path::Path;
-use std::sync::RwLock;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, Weak};
 
 mod atoms {
-    rustler::atoms! { ok }
+    rustler::atoms! { ok, nil }
 }
 
-pub struct IndexRes(RwLock<Index>);
+pub struct IndexRes(Arc<Index>);
+
+/// Open environments in this OS process: LMDB allows one Env per directory, so `open` on an
+/// already-open directory returns the same index.
+static OPEN: Mutex<Option<HashMap<PathBuf, Weak<Index>>>> = Mutex::new(None);
 
 #[rustler::resource_impl]
 impl rustler::Resource for IndexRes {}
@@ -37,8 +42,10 @@ impl Encoder for Error {
 type NifResult<T> = Result<T, Error>;
 type MetaPairs = Vec<(String, String)>;
 type FilterSpec = Vec<(String, Vec<String>)>;
-/// (k, ef, exact, brute_force_threshold)
-type SearchSpec = (usize, usize, bool, usize);
+/// (k, ef, exact, brute_force_threshold, payload)
+type SearchSpec = (usize, usize, bool, usize, bool);
+/// (dim, metric, m, ef_construction, map_size, sync)
+type ConfigSpec = (usize, String, usize, usize, usize, bool);
 /// (dim, metric, size, deleted, m, ef_construction)
 type InfoSpec = (usize, &'static str, usize, usize, usize, usize);
 
@@ -55,27 +62,25 @@ fn floats(bin: &Binary) -> NifResult<Vec<f32>> {
             "vector binary length must be a multiple of 4",
         ));
     }
-    Ok(bin
-        .as_slice()
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .collect())
+    Ok(store::decode_f32s(bin.as_slice()))
 }
 
-fn read(res: &IndexRes) -> NifResult<std::sync::RwLockReadGuard<'_, Index>> {
-    res.0
-        .read()
-        .map_err(|_| Error::new("internal", "index lock poisoned"))
+fn config(spec: ConfigSpec) -> NifResult<Config> {
+    let (dim, metric, m, ef_construction, map_size, sync) = spec;
+    Ok(Config {
+        dim,
+        metric: Metric::parse(&metric)?,
+        m,
+        ef_construction,
+        map_size,
+        sync,
+    })
 }
 
-fn write(res: &IndexRes) -> NifResult<std::sync::RwLockWriteGuard<'_, Index>> {
-    res.0
-        .write()
-        .map_err(|_| Error::new("internal", "index lock poisoned"))
-}
-
-fn wrap(idx: Index) -> ResourceArc<IndexRes> {
-    ResourceArc::new(IndexRes(RwLock::new(idx)))
+fn bin<'a>(env: Env<'a>, bytes: &[u8]) -> Term<'a> {
+    let mut out = NewBinary::new(env, bytes.len());
+    out.as_mut_slice().copy_from_slice(bytes);
+    Binary::from(out).encode(env)
 }
 
 #[rustler::nif]
@@ -83,126 +88,110 @@ fn nif_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
-#[rustler::nif]
-fn new(
-    dim: usize,
-    metric: String,
-    m: usize,
-    ef_construction: usize,
-) -> NifResult<ResourceArc<IndexRes>> {
+#[rustler::nif(schedule = "DirtyIo")]
+fn open(dir: String, spec: ConfigSpec) -> NifResult<ResourceArc<IndexRes>> {
     guard(|| {
-        let params = hnsw::Params {
-            m,
-            ef_construction,
-            ..Default::default()
-        };
-        Ok(wrap(Index::with_params(
-            dim,
-            Metric::parse(&metric)?,
-            params,
-        )?))
+        let cfg = config(spec)?;
+        std::fs::create_dir_all(&dir).map_err(|e| Error::new("io", e.to_string()))?;
+        let key = std::fs::canonicalize(&dir).map_err(|e| Error::new("io", e.to_string()))?;
+        let mut open = OPEN
+            .lock()
+            .map_err(|_| Error::new("internal", "registry poisoned"))?;
+        let open = open.get_or_insert_with(HashMap::new);
+        open.retain(|_, w| w.strong_count() > 0);
+        if let Some(existing) = open.get(&key).and_then(Weak::upgrade) {
+            existing.check_config(&cfg)?;
+            return Ok(ResourceArc::new(IndexRes(existing)));
+        }
+        let index = Arc::new(Index::open(&key, &cfg)?);
+        open.insert(key, Arc::downgrade(&index));
+        Ok(ResourceArc::new(IndexRes(index)))
     })
 }
 
-#[rustler::nif(schedule = "DirtyCpu")]
-fn insert(res: ResourceArc<IndexRes>, id: u64, vector: Binary, meta: MetaPairs) -> NifResult<Atom> {
+#[rustler::nif(schedule = "DirtyIo")]
+fn temp(spec: ConfigSpec) -> NifResult<ResourceArc<IndexRes>> {
     guard(|| {
-        let v = floats(&vector)?;
-        write(&res)?.insert(id, &v, meta)?;
-        Ok(atoms::ok())
+        Ok(ResourceArc::new(IndexRes(Arc::new(Index::temp(&config(
+            spec,
+        )?)?))))
     })
 }
 
-#[rustler::nif(schedule = "DirtyCpu")]
+#[rustler::nif(schedule = "DirtyIo")]
 fn insert_many(
     res: ResourceArc<IndexRes>,
-    items: Vec<(u64, Binary, MetaPairs)>,
+    items: Vec<(u64, Binary, MetaPairs, Option<Binary>)>,
 ) -> NifResult<Atom> {
     guard(|| {
         let decoded = items
             .into_iter()
-            .map(|(id, v, meta)| floats(&v).map(|v| (id, v, meta)))
+            .map(|(id, v, meta, payload)| {
+                floats(&v).map(|v| (id, v, meta, payload.map(|p| p.as_slice().to_vec())))
+            })
             .collect::<NifResult<Vec<_>>>()?;
-        write(&res)?.insert_many(decoded)?;
+        res.0.insert_many(decoded)?;
         Ok(atoms::ok())
     })
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
-fn search(
+fn search<'a>(
+    env: Env<'a>,
     res: ResourceArc<IndexRes>,
     query: Binary,
     filter: FilterSpec,
     opts: SearchSpec,
-) -> NifResult<Vec<(u64, f64)>> {
+) -> NifResult<Vec<Term<'a>>> {
     guard(|| {
         let q = floats(&query)?;
-        let (k, ef, exact, brute_force_threshold) = opts;
+        let (k, ef, exact, brute_force_threshold, payload) = opts;
         let o = SearchOpts {
             k,
             ef,
             exact,
             brute_force_threshold,
+            payload,
         };
-        let hits = read(&res)?.search(&q, &filter, &o)?;
-        Ok(hits.into_iter().map(|(id, d)| (id, d as f64)).collect())
+        let hits = res.0.search(&q, &filter, &o)?;
+        Ok(hits
+            .into_iter()
+            .map(|(id, d, p)| match (payload, p) {
+                (false, _) => (id, d as f64).encode(env),
+                (true, Some(p)) => (id, d as f64, bin(env, &p)).encode(env),
+                (true, None) => (id, d as f64, atoms::nil()).encode(env),
+            })
+            .collect())
     })
 }
 
-#[rustler::nif]
+#[rustler::nif(schedule = "DirtyIo")]
 fn delete(res: ResourceArc<IndexRes>, id: u64) -> NifResult<bool> {
-    guard(|| Ok(write(&res)?.delete(id)))
+    guard(|| res.0.delete(id))
+}
+
+#[rustler::nif(schedule = "DirtyIo")]
+fn get_payload<'a>(env: Env<'a>, res: ResourceArc<IndexRes>, id: u64) -> NifResult<Term<'a>> {
+    guard(|| {
+        Ok(res
+            .0
+            .get_payload(id)?
+            .map_or(atoms::nil().encode(env), |p| bin(env, &p)))
+    })
 }
 
 #[rustler::nif]
 fn info(res: ResourceArc<IndexRes>) -> NifResult<InfoSpec> {
     guard(|| {
-        let idx = read(&res)?;
-        let p = &idx.graph.params;
-        Ok((
-            idx.dim,
-            idx.metric.name(),
-            idx.len(),
-            idx.deleted(),
-            p.m,
-            p.ef_construction,
-        ))
+        let (dim, metric, live, deleted, m, ef_c) = res.0.info()?;
+        Ok((dim, metric.name(), live, deleted, m, ef_c))
     })
 }
 
 #[rustler::nif(schedule = "DirtyIo")]
-fn save(res: ResourceArc<IndexRes>, path: String) -> NifResult<Atom> {
+fn backup(res: ResourceArc<IndexRes>, dir: String) -> NifResult<Atom> {
     guard(|| {
-        snapshot::save(&*read(&res)?, Path::new(&path))?;
-        Ok(atoms::ok())
-    })
-}
-
-#[rustler::nif(schedule = "DirtyIo")]
-fn load(path: String) -> NifResult<ResourceArc<IndexRes>> {
-    guard(|| Ok(wrap(snapshot::load(Path::new(&path))?)))
-}
-
-#[rustler::nif(schedule = "DirtyCpu")]
-fn to_binary<'a>(env: Env<'a>, res: ResourceArc<IndexRes>) -> NifResult<Binary<'a>> {
-    guard(|| {
-        let bytes = snapshot::encode(&*read(&res)?);
-        let mut out = NewBinary::new(env, bytes.len());
-        out.as_mut_slice().copy_from_slice(&bytes);
-        Ok(out.into())
-    })
-}
-
-#[rustler::nif(schedule = "DirtyCpu")]
-fn from_binary(bytes: Binary) -> NifResult<ResourceArc<IndexRes>> {
-    guard(|| Ok(wrap(snapshot::decode(bytes.as_slice())?)))
-}
-
-/// Makes directory entries (new files, renames) durable.
-#[rustler::nif(schedule = "DirtyIo")]
-fn fsync_dir(path: String) -> NifResult<Atom> {
-    guard(|| {
-        snapshot::fsync_dir(Path::new(&path))?;
+        res.0.backup(Path::new(&dir))?;
         Ok(atoms::ok())
     })
 }

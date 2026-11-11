@@ -1,6 +1,6 @@
 # ADR005: Snapshot Persistence, Application as System of Record
 
-- Status: Amended by ADR007 (snapshots become WAL checkpoints)
+- Status: Superseded by ADR009
 - Date: 2026-11-11
 - Decision owners: BrainIndex maintainers
 

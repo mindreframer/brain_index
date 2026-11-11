@@ -9,6 +9,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 rustler = "=0.38.0"
+heed = { version = "=0.22.1", default-features = false }
 
 [profile.release]
 codegen-units = 1

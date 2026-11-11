@@ -50,6 +50,19 @@ impl Metric {
         Ok(())
     }
 
+    /// Distance between a prepared query and a stored (mapped, possibly unaligned) vector.
+    #[inline]
+    pub fn distance_bytes(self, q: &[f32], b: &[u8]) -> f32 {
+        match self {
+            Metric::Cosine => 1.0 - crate::simd::dot_bytes(q, b),
+            Metric::Lorentz => {
+                let b0 = f32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+                let inner = crate::simd::dot_bytes(&q[1..], &b[4..]) - q[0] * b0;
+                (-inner).max(1.0).acosh()
+            }
+        }
+    }
+
     #[inline]
     pub fn distance(self, a: &[f32], b: &[f32]) -> f32 {
         match self {
