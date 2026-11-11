@@ -270,8 +270,17 @@ impl Index {
 
 #[cfg(test)]
 mod tests {
-    use crate::index::Index;
+    use crate::index::{Index, SearchOpts};
     use crate::metric::Metric;
+
+    fn opts(k: usize, ef: usize, exact: bool) -> SearchOpts {
+        SearchOpts {
+            k,
+            ef,
+            exact,
+            ..Default::default()
+        }
+    }
 
     fn random_vectors(n: usize, dim: usize, seed: u64) -> Vec<Vec<f32>> {
         let mut s = seed;
@@ -288,12 +297,17 @@ mod tests {
         let mut hit = 0;
         for q in queries {
             let exact: Vec<u64> = idx
-                .exact_search(q, k, |_| true)
+                .search(q, &vec![], &opts(k, 0, true))
                 .unwrap()
                 .iter()
                 .map(|h| h.0)
                 .collect();
-            let approx: Vec<u64> = idx.search(q, k, 64).unwrap().iter().map(|h| h.0).collect();
+            let approx: Vec<u64> = idx
+                .search(q, &vec![], &opts(k, 64, false))
+                .unwrap()
+                .iter()
+                .map(|h| h.0)
+                .collect();
             hit += approx.iter().filter(|id| exact.contains(id)).count();
         }
         hit as f64 / (queries.len() * k) as f64
@@ -303,10 +317,45 @@ mod tests {
     fn hnsw_recall_vs_exact_on_random_data() {
         let mut idx = Index::new(32, Metric::Cosine).unwrap();
         for (i, v) in random_vectors(3000, 32, 7).iter().enumerate() {
-            idx.insert(i as u64, v).unwrap();
+            idx.insert(i as u64, v, vec![]).unwrap();
         }
         let r = recall_vs_exact(&idx, &random_vectors(100, 32, 99), 10);
         assert!(r >= 0.95, "recall {r}");
+    }
+
+    #[test]
+    fn filtered_hnsw_matches_filtered_exact() {
+        let mut idx = Index::new(32, Metric::Cosine).unwrap();
+        for (i, v) in random_vectors(3000, 32, 11).iter().enumerate() {
+            let tag = if i % 10 == 0 { "rare" } else { "common" };
+            idx.insert(i as u64, v, vec![("tag".into(), tag.into())])
+                .unwrap();
+        }
+        let f = vec![("tag".to_string(), vec!["rare".to_string()])];
+        let forced_hnsw = SearchOpts {
+            k: 10,
+            ef: 100,
+            exact: false,
+            brute_force_threshold: 0,
+        };
+        let (mut hit, mut total) = (0, 0);
+        for q in random_vectors(50, 32, 5) {
+            let exact: Vec<u64> = idx
+                .search(&q, &f, &opts(10, 0, true))
+                .unwrap()
+                .iter()
+                .map(|h| h.0)
+                .collect();
+            let approx = idx.search(&q, &f, &forced_hnsw).unwrap();
+            assert!(approx.iter().all(|h| h.0 % 10 == 0), "filter violated");
+            hit += approx.iter().filter(|h| exact.contains(&h.0)).count();
+            total += 10;
+        }
+        assert!(
+            hit as f64 / total as f64 >= 0.95,
+            "recall {}",
+            hit as f64 / total as f64
+        );
     }
 
     #[test]
@@ -314,7 +363,7 @@ mod tests {
         let build = || {
             let mut idx = Index::new(8, Metric::Cosine).unwrap();
             for (i, v) in random_vectors(300, 8, 3).iter().enumerate() {
-                idx.insert(i as u64, v).unwrap();
+                idx.insert(i as u64, v, vec![]).unwrap();
             }
             idx.graph.links.clone()
         };
@@ -324,9 +373,17 @@ mod tests {
     #[test]
     fn empty_and_single_node() {
         let mut idx = Index::new(2, Metric::Cosine).unwrap();
-        assert!(idx.search(&[1.0, 0.0], 3, 10).unwrap().is_empty());
-        idx.insert(5, &[1.0, 0.0]).unwrap();
-        assert_eq!(idx.search(&[0.0, 1.0], 3, 10).unwrap()[0].0, 5);
+        assert!(idx
+            .search(&[1.0, 0.0], &vec![], &opts(3, 10, false))
+            .unwrap()
+            .is_empty());
+        idx.insert(5, &[1.0, 0.0], vec![]).unwrap();
+        assert_eq!(
+            idx.search(&[0.0, 1.0], &vec![], &opts(3, 10, false))
+                .unwrap()[0]
+                .0,
+            5
+        );
     }
 }
 
@@ -369,7 +426,7 @@ mod fixture_tests {
         ] {
             let mut idx = Index::new(dim, metric).unwrap();
             for (i, v) in load(file, dim).iter().enumerate() {
-                idx.insert(i as u64, v).unwrap();
+                idx.insert(i as u64, v, vec![]).unwrap();
             }
             assert_eq!(reachable(&idx), idx.len(), "{file}");
         }

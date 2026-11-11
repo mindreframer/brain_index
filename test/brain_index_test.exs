@@ -4,8 +4,8 @@ defmodule BrainIndexTest do
 
   setup do
     {:ok, index} = BrainIndex.new(dim: 3, metric: :cosine)
-    :ok = BrainIndex.insert(index, 1, [1.0, 0.0, 0.0])
-    :ok = BrainIndex.insert(index, 2, [0.0, 1.0, 0.0])
+    :ok = BrainIndex.insert(index, 1, [1.0, 0.0, 0.0], %{kind: "kb", lang: "de"})
+    :ok = BrainIndex.insert(index, 2, [0.0, 1.0, 0.0], %{"kind" => "ticket", "lang" => "en"})
     %{index: index}
   end
 
@@ -18,6 +18,17 @@ defmodule BrainIndexTest do
   test "accepts f32 binaries", %{index: index} do
     q = BrainIndex.encode([0.0, 1.0, 0.0])
     assert {:ok, [{2, _} | _]} = BrainIndex.search(index, q, 1)
+  end
+
+  test "metadata filters", %{index: index} do
+    q = [1.0, 1.0, 0.0]
+    assert {:ok, [{1, _}]} = BrainIndex.search(index, q, 5, filter: %{kind: "kb"})
+    assert {:ok, [_, _]} = BrainIndex.search(index, q, 5, filter: %{"kind" => ["kb", "ticket"]})
+
+    assert {:ok, [{2, _}]} =
+             BrainIndex.search(index, q, 5, filter: %{"kind" => ["kb", "ticket"], "lang" => "en"})
+
+    assert {:ok, []} = BrainIndex.search(index, q, 5, filter: %{"kind" => "unknown"})
   end
 
   test "errors are tagged, never raised", %{index: index} do

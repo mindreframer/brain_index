@@ -1,5 +1,6 @@
 //! BrainIndex native core. Design decisions live in `@meta/@adr`.
 
+pub mod bitset;
 pub mod error;
 pub mod hnsw;
 pub mod index;
@@ -8,7 +9,7 @@ pub mod simd;
 pub mod topk;
 
 use error::Error;
-use index::Index;
+use index::{Index, SearchOpts};
 use metric::Metric;
 use rustler::{Atom, Binary, Encoder, Env, ResourceArc, Term};
 use std::sync::RwLock;
@@ -71,9 +72,17 @@ fn new(
 }
 
 #[rustler::nif]
-fn insert(res: ResourceArc<IndexRes>, id: u64, vector: Binary) -> NifResult<Atom> {
+fn insert(
+    res: ResourceArc<IndexRes>,
+    id: u64,
+    vector: Binary,
+    meta: Vec<(String, String)>,
+) -> NifResult<Atom> {
     let v = floats(&vector)?;
-    res.0.write().map_err(|_| poisoned())?.insert(id, &v)?;
+    res.0
+        .write()
+        .map_err(|_| poisoned())?
+        .insert(id, &v, meta)?;
     Ok(atoms::ok())
 }
 
@@ -82,28 +91,25 @@ fn size(res: ResourceArc<IndexRes>) -> NifResult<usize> {
     Ok(res.0.read().map_err(|_| poisoned())?.len())
 }
 
-#[rustler::nif(schedule = "DirtyCpu")]
-fn exact_search(res: ResourceArc<IndexRes>, query: Binary, k: usize) -> NifResult<Vec<(u64, f64)>> {
-    let q = floats(&query)?;
-    let idx = res.0.read().map_err(|_| poisoned())?;
-    Ok(idx
-        .exact_search(&q, k, |_| true)?
-        .into_iter()
-        .map(|(id, d)| (id, d as f64))
-        .collect())
-}
-
+/// opts: (k, ef, exact, brute_force_threshold)
 #[rustler::nif(schedule = "DirtyCpu")]
 fn search(
     res: ResourceArc<IndexRes>,
     query: Binary,
-    k: usize,
-    ef: usize,
+    filter: Vec<(String, Vec<String>)>,
+    opts: (usize, usize, bool, usize),
 ) -> NifResult<Vec<(u64, f64)>> {
     let q = floats(&query)?;
+    let (k, ef, exact, brute_force_threshold) = opts;
+    let o = SearchOpts {
+        k,
+        ef,
+        exact,
+        brute_force_threshold,
+    };
     let idx = res.0.read().map_err(|_| poisoned())?;
     Ok(idx
-        .search(&q, k, ef)?
+        .search(&q, &filter, &o)?
         .into_iter()
         .map(|(id, d)| (id, d as f64))
         .collect())

@@ -4,10 +4,9 @@ defmodule BrainIndex.Native do
 
   def nif_version, do: err()
   def new(_dim, _metric, _m, _ef_construction), do: err()
-  def insert(_index, _id, _vector), do: err()
+  def insert(_index, _id, _vector, _meta), do: err()
   def size(_index), do: err()
-  def exact_search(_index, _query, _k), do: err()
-  def search(_index, _query, _k, _ef), do: err()
+  def search(_index, _query, _filter, _opts), do: err()
 
   defp err, do: :erlang.nif_error(:nif_not_loaded)
 end
