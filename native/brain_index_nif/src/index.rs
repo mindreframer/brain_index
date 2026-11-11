@@ -420,6 +420,48 @@ impl Index {
         self.len() == 0
     }
 
+    /// Rebuilds the live vectors (with metadata and payloads) into a fresh index in `dir`, which
+    /// must not already hold an index. Drops tombstones and repairs the graph around them. Runs on
+    /// one read snapshot, so writes may continue meanwhile (they are not copied). Streams in
+    /// batches: memory stays bounded by `batch`.
+    pub fn compact_to(&self, dir: &Path, batch: usize) -> Result<usize> {
+        let r = self.store.env.read_txn()?;
+        let h = self.header(&r)?;
+        let cfg = Config {
+            m: h.m,
+            ef_construction: h.ef_construction,
+            sync: false,
+            ..Config::new(h.dim, h.metric)
+        };
+        let dest = Self::open(dir, &cfg)?;
+        if !dest.is_empty() || dest.header(&*dest.store.env.read_txn()?)?.next_node > 0 {
+            return Err(Error::invalid_argument("compaction target is not empty"));
+        }
+        let s = &self.store;
+        let mut items = Vec::with_capacity(batch);
+        let mut copied = 0;
+        for entry in s.ids.iter(&r)? {
+            let (ext_bytes, node_bytes) = entry?;
+            let bad = |_| Error::new("corrupt_store", "bad id record");
+            let ext = u64::from_be_bytes(ext_bytes.try_into().map_err(bad)?);
+            let node = u32::from_be_bytes(node_bytes.try_into().map_err(bad)?);
+            let v = crate::store::decode_f32s(s.vectors.get(&r, &node_key(node))?.unwrap_or(&[]));
+            let meta = decode_meta(s.meta.get(&r, &node_key(node))?.unwrap_or(&[0, 0]))?;
+            let payload = s.payloads.get(&r, &ext_key(ext))?.map(<[u8]>::to_vec);
+            items.push((ext, v, meta, payload));
+            if items.len() >= batch.max(1) {
+                copied += items.len();
+                dest.insert_many(std::mem::take(&mut items))?;
+            }
+        }
+        copied += items.len();
+        if !items.is_empty() {
+            dest.insert_many(items)?;
+        }
+        dest.store.env.force_sync()?;
+        Ok(copied)
+    }
+
     /// Consistent, compacted online copy into `dir` (opens with `Index::open`).
     pub fn backup(&self, dir: &Path) -> Result<()> {
         std::fs::create_dir_all(dir).map_err(|e| Error::new("io", e.to_string()))?;
@@ -676,6 +718,52 @@ pub(crate) mod tests {
                 .reason,
             "invalid_argument"
         );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn compaction_drops_tombstones_and_keeps_data() {
+        let i = Index::temp(&Config::new(16, Metric::Cosine)).unwrap();
+        let items = random_vectors(200, 16, 7)
+            .into_iter()
+            .enumerate()
+            .map(|(n, v)| {
+                let kind = if n % 2 == 0 { "kb" } else { "ticket" };
+                (n as u64, v, meta(&[("kind", kind)]), Some(vec![n as u8]))
+            })
+            .collect();
+        i.insert_many(items).unwrap();
+        let before = i.info().unwrap();
+        for ext in 0..10u64 {
+            assert!(i.delete(ext).unwrap());
+        }
+        let dir = std::env::temp_dir().join(format!("bi-compact-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let n = i.compact_to(&dir, 7).unwrap();
+        assert_eq!(n, i.len());
+        let c = Index::open(&dir, &Config::new(before.0, before.1)).unwrap();
+        let (_, _, live, deleted, m, ef_c) = c.info().unwrap();
+        assert_eq!((live, deleted, m, ef_c), (i.len(), 0, before.4, before.5));
+        let q = random_vectors(5, before.0, 99);
+        for q in &q {
+            let a = ids(&i.search(q, &vec![], &opts(5, true, 0)).unwrap());
+            let b = ids(&c.search(q, &vec![], &opts(5, true, 0)).unwrap());
+            assert_eq!(a, b);
+        }
+        let kb = filter(&[("kind", &["kb"])]);
+        let a = i.search(&q[0], &kb, &opts(5, true, 0)).unwrap();
+        let mut o = opts(5, true, 0);
+        o.payload = true;
+        let b = c.search(&q[0], &kb, &o).unwrap();
+        assert_eq!(ids(&a), ids(&b));
+        assert!(b
+            .iter()
+            .all(|(e, _, p)| p.as_deref() == Some(&[*e as u8][..])));
+        assert!(
+            i.compact_to(&dir, 7).is_err(),
+            "non-empty target is refused"
+        );
+        drop(c);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

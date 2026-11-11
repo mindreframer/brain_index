@@ -11,6 +11,7 @@ defmodule BrainIndex.Native do
   def get_payload(_index, _id), do: err()
   def info(_index), do: err()
   def backup(_index, _dir), do: err()
+  def compact(_index, _dir, _batch), do: err()
 
   defp err, do: :erlang.nif_error(:nif_not_loaded)
 end

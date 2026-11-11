@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.0 — 2026-11-11
+
+- `compact/3` (ADR011): rebuilds the live vectors, metadata and payloads into a new directory and
+  drops tombstones; the source stays online.
+
 ## 0.3.0 — 2026-11-11
 
 - **LMDB storage engine** (ADR009): disk-resident, incremental commits, instant recovery; replaces

@@ -196,6 +196,26 @@ fn backup(res: ResourceArc<IndexRes>, dir: String) -> NifResult<Atom> {
     })
 }
 
+#[rustler::nif(schedule = "DirtyIo")]
+fn compact(res: ResourceArc<IndexRes>, dir: String, batch: usize) -> NifResult<usize> {
+    guard(|| {
+        std::fs::create_dir_all(&dir).map_err(|e| Error::new("io", e.to_string()))?;
+        let key = std::fs::canonicalize(&dir).map_err(|e| Error::new("io", e.to_string()))?;
+        let open = OPEN
+            .lock()
+            .map_err(|_| Error::new("internal", "registry poisoned"))?;
+        if open
+            .as_ref()
+            .and_then(|m| m.get(&key))
+            .is_some_and(|w| w.strong_count() > 0)
+        {
+            return Err(Error::invalid_argument("compaction target is open"));
+        }
+        // Hold the registry lock so nobody opens the target while it is being built.
+        res.0.compact_to(&key, batch)
+    })
+}
+
 rustler::init!("Elixir.BrainIndex.Native");
 
 #[cfg(test)]

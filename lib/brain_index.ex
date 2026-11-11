@@ -214,6 +214,20 @@ defmodule BrainIndex do
   @spec backup(t(), Path.t()) :: :ok | {:error, Error.t()}
   def backup(index, dir), do: Error.wrap(Native.backup(index, to_string(dir)))
 
+  @doc """
+  Rebuilds the live vectors, metadata and payloads into a fresh index in the empty directory
+  `dir`. Tombstones are dropped and the graph is rebuilt without them. Runs on a snapshot, so the
+  source stays online, but writes made during the run are not copied: pause writers (or replay
+  them) before switching over. Returns the number of vectors copied.
+
+  Use it when `info/1` reports many `deleted` nodes. Options: `batch:` (default 1000).
+  """
+  @spec compact(t(), Path.t(), keyword()) :: {:ok, non_neg_integer()} | {:error, Error.t()}
+  def compact(index, dir, opts \\ []) do
+    batch = Keyword.get(opts, :batch, 1000)
+    Error.wrap(Native.compact(index, to_string(dir), batch))
+  end
+
   @doc "Encodes a list of numbers as a little-endian f32 binary (the fastest vector input)."
   @spec encode(vector()) :: binary()
   def encode(vector) when is_binary(vector), do: vector

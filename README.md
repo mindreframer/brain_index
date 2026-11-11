@@ -17,6 +17,7 @@ NIF. It is the retrieval core of the company brain. Internal package, not publis
 
 {:ok, true} = BrainIndex.delete(index, 2)
 :ok = BrainIndex.backup(index, "/backups/brain-2026-11-11")     # consistent online copy
+{:ok, _copied} = BrainIndex.compact(index, "/var/lib/brain.next") # drop tombstones (ADR011)
 BrainIndex.info(index)
 # => %{dim: 768, metric: :cosine, size: 1, deleted: 1, m: 16, ef_construction: 200}
 

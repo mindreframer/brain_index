@@ -42,6 +42,36 @@ defmodule BrainIndex.PersistenceTest do
              BrainIndex.search(index, vec(9), 5, payload: true)
   end
 
+  test "compact drops tombstones, keeps payloads and filters, refuses busy targets", %{
+    tmp_dir: dir
+  } do
+    {:ok, index} = BrainIndex.open(Path.join(dir, "src"), dim: 4)
+
+    :ok =
+      BrainIndex.insert_many(
+        index,
+        for(i <- 1..40, do: {i, vec(i), %{"p" => rem(i, 2)}, "c#{i}"})
+      )
+
+    for i <- 1..10, do: {:ok, true} = BrainIndex.delete(index, i)
+    assert %{deleted: 10} = BrainIndex.info(index)
+
+    target = Path.join(dir, "compacted")
+    assert {:ok, 30} = BrainIndex.compact(index, target, batch: 7)
+    {:ok, c} = BrainIndex.open(target, dim: 4)
+    assert %{size: 30, deleted: 0} = BrainIndex.info(c)
+
+    opts = [filter: %{"p" => 1}, payload: true, exact: true]
+    # Same hits and payloads; distances may differ in the last bit (vectors are re-normalised).
+    hits = fn i ->
+      i |> BrainIndex.search(vec(13), 5, opts) |> elem(1) |> Enum.map(&Tuple.delete_at(&1, 1))
+    end
+
+    assert hits.(c) == hits.(index)
+
+    assert {:error, %Error{reason: :invalid_argument}} = BrainIndex.compact(index, target)
+  end
+
   test "payload validation" do
     {:ok, index} = BrainIndex.new(dim: 2)
 
