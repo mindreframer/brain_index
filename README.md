@@ -9,7 +9,7 @@ Not on Hex. Precompiled NIFs (macOS, Linux gnu/musl, Windows; arm64/x86_64) down
 releases, so no Rust toolchain is needed (ADR013):
 
 ```elixir
-{:brain_index, github: "mindreframer/brain_index", tag: "v0.5.0"}
+{:brain_index, github: "mindreframer/brain_index", tag: "v0.5.1"}
 ```
 
 Set `BRAIN_INDEX_BUILD=1` to build from source.

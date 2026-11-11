@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.1 — 2026-11-11
+
+- Linux x86_64 gnu NIF is built on Ubuntu 22.04 (glibc 2.35), so it loads on Debian 12 and
+  Ubuntu 22.04+. 0.5.0 needed glibc 2.38.
+
 ## 0.5.0 — 2026-11-11
 
 - Precompiled NIFs from GitHub releases via RustlerPrecompiled (ADR013); `BRAIN_INDEX_BUILD=1`

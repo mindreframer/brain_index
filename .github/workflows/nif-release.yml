@@ -37,7 +37,7 @@ jobs:
 
           # Linux GNU
           - { target: aarch64-unknown-linux-gnu, os: ubuntu-24.04, use-cross: true }
-          - { target: x86_64-unknown-linux-gnu, os: ubuntu-24.04 }
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-22.04 } # glibc 2.35: loads on Debian 12+ and Ubuntu 22.04+
 
           # Linux musl
           - { target: aarch64-unknown-linux-musl, os: ubuntu-24.04, use-cross: true }
