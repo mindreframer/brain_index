@@ -2,13 +2,13 @@
 
 ## Progress
 
-- [ ] Phase 4.1: Replace DETS with payloads.
-- [ ] Phase 4.2: Model loaded once in the running app; sequence-length buckets for fast queries.
+- [x] Phase 4.1: Replace DETS with payloads.
+- [x] Phase 4.2: Model loaded once in the running app; sequence-length buckets for fast queries.
 
 ## Quality Gate
 
-- [ ] Demo tests green; eval recall unchanged.
-- [ ] `bin/qa_check.sh` passes.
+- [x] Demo tests green; eval recall unchanged.
+- [x] `bin/qa_check.sh` passes.
 
 ## Commit Rule
 

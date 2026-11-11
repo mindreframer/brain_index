@@ -1,6 +1,6 @@
 # ROADMAP003 — Disk-Resident LMDB Engine, Payloads, Live Demo UI
 
-- **Status:** In progress
+- **Status:** Completed at `0.3.0` (2026-11-11)
 - **Target release:** `0.3.0` (internal)
 - **ADRs:** ADR009 (LMDB engine, supersedes ADR005/ADR007), ADR010 (payloads)
 
