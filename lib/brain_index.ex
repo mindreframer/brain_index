@@ -186,6 +186,13 @@ defmodule BrainIndex do
 
   # --- validation -----------------------------------------------------------------------------
 
+  @doc false
+  # Validates and encodes `{id, vector, meta}` into the native/log form `{id, f32_binary, pairs}`.
+  def prepare_item(item), do: item(item)
+
+  @doc false
+  def prepare_id(id), do: id(id)
+
   defp item({id, v}), do: item({id, v, %{}})
 
   defp item({id, v, meta}) do
