@@ -6,6 +6,7 @@ pub mod hnsw;
 pub mod index;
 pub mod metric;
 pub mod simd;
+pub mod snapshot;
 pub mod topk;
 
 use error::Error;
@@ -113,6 +114,24 @@ fn search(
         .into_iter()
         .map(|(id, d)| (id, d as f64))
         .collect())
+}
+
+#[rustler::nif]
+fn delete(res: ResourceArc<IndexRes>, id: u64) -> NifResult<bool> {
+    Ok(res.0.write().map_err(|_| poisoned())?.delete(id))
+}
+
+#[rustler::nif(schedule = "DirtyIo")]
+fn save(res: ResourceArc<IndexRes>, path: String) -> NifResult<Atom> {
+    let idx = res.0.read().map_err(|_| poisoned())?;
+    snapshot::save(&idx, std::path::Path::new(&path))?;
+    Ok(atoms::ok())
+}
+
+#[rustler::nif(schedule = "DirtyIo")]
+fn load(path: String) -> NifResult<ResourceArc<IndexRes>> {
+    let idx = snapshot::load(std::path::Path::new(&path))?;
+    Ok(ResourceArc::new(IndexRes(RwLock::new(idx))))
 }
 
 rustler::init!("Elixir.BrainIndex.Native");

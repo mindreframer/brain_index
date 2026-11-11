@@ -34,6 +34,18 @@ defmodule BrainIndex do
     Error.wrap(Native.insert(index, id, encode(vector), encode_meta(meta)))
   end
 
+  @doc "Deletes `id`. Returns `{:ok, true}` if it existed."
+  @spec delete(t(), id()) :: {:ok, boolean()} | {:error, Error.t()}
+  def delete(index, id), do: Error.wrap(Native.delete(index, id))
+
+  @doc "Writes a crash-safe snapshot of the whole index to `path` (atomic replace)."
+  @spec save(t(), Path.t()) :: :ok | {:error, Error.t()}
+  def save(index, path), do: Error.wrap(Native.save(index, to_string(path)))
+
+  @doc "Loads a snapshot written by `save/2`."
+  @spec load(Path.t()) :: {:ok, t()} | {:error, Error.t()}
+  def load(path), do: Error.wrap(Native.load(to_string(path)))
+
   @doc "Number of live vectors."
   @spec size(t()) :: non_neg_integer()
   def size(index) do

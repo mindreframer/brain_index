@@ -8,5 +8,9 @@ defmodule BrainIndex.Native do
   def size(_index), do: err()
   def search(_index, _query, _filter, _opts), do: err()
 
+  def delete(_index, _id), do: err()
+  def save(_index, _path), do: err()
+  def load(_path), do: err()
+
   defp err, do: :erlang.nif_error(:nif_not_loaded)
 end

@@ -99,16 +99,39 @@ impl Index {
         Ok(v)
     }
 
+    /// Inserts or replaces (upsert) the vector stored under `ext_id`.
     pub fn insert(&mut self, ext_id: u64, v: &[f32], meta: Meta) -> Result<()> {
         let v = self.prepare(v)?;
         if self.ext_ids.len() >= u32::MAX as usize {
             return Err(Error::invalid_argument("index is full"));
         }
+        self.delete(ext_id);
         let node = self.ext_ids.len() as u32;
         self.vectors.extend_from_slice(&v);
         self.ext_ids.push(ext_id);
         self.by_ext.insert(ext_id, node);
-        for (k, val) in &meta {
+        self.add_postings(node, &meta);
+        self.node_meta.push(meta);
+        self.graph_insert(node);
+        Ok(())
+    }
+
+    /// Tombstones `ext_id`: the node keeps routing searches but never matches. Returns whether it existed.
+    pub fn delete(&mut self, ext_id: u64) -> bool {
+        let Some(node) = self.by_ext.remove(&ext_id) else {
+            return false;
+        };
+        let meta = std::mem::take(&mut self.node_meta[node as usize]);
+        for (k, v) in &meta {
+            if let Some(bits) = self.postings.get_mut(k).and_then(|m| m.get_mut(v)) {
+                bits.clear(node);
+            }
+        }
+        true
+    }
+
+    pub(crate) fn add_postings(&mut self, node: u32, meta: &Meta) {
+        for (k, val) in meta {
             self.postings
                 .entry(k.clone())
                 .or_default()
@@ -116,9 +139,11 @@ impl Index {
                 .or_default()
                 .set(node);
         }
-        self.node_meta.push(meta);
-        self.graph_insert(node);
-        Ok(())
+    }
+
+    /// Number of tombstoned nodes still held in the graph.
+    pub fn deleted(&self) -> usize {
+        self.ext_ids.len() - self.by_ext.len()
     }
 
     /// Allowed nodes for `filter`, or `None` when the filter is empty (everything allowed).
@@ -252,6 +277,46 @@ pub(crate) mod tests {
                 .unwrap()
                 .is_empty());
         }
+    }
+
+    #[test]
+    fn delete_and_upsert() {
+        let mut i = idx();
+        assert!(i.delete(10));
+        assert!(!i.delete(10));
+        for exact in [true, false] {
+            let hits = i.search(&[1.0, 0.0], &vec![], &opts(3, exact, 0)).unwrap();
+            assert_eq!(ids(&hits), vec![30, 20]);
+        }
+        assert!(i
+            .search(
+                &[1.0, 0.0],
+                &filter(&[("lang", &["de"])]),
+                &opts(3, false, 0)
+            )
+            .unwrap()
+            .is_empty());
+        // Upsert moves id 20 next to [1, 0] and changes its metadata.
+        i.insert(20, &[1.0, 0.0], meta(&[("kind", "kb")])).unwrap();
+        assert_eq!(
+            ids(&i
+                .search(
+                    &[1.0, 0.0],
+                    &filter(&[("kind", &["kb"])]),
+                    &opts(1, false, 0)
+                )
+                .unwrap()),
+            vec![20]
+        );
+        assert!(i
+            .search(
+                &[1.0, 0.0],
+                &filter(&[("kind", &["ticket"])]),
+                &opts(3, false, 0)
+            )
+            .unwrap()
+            .is_empty());
+        assert_eq!((i.len(), i.deleted()), (2, 2));
     }
 
     #[test]
