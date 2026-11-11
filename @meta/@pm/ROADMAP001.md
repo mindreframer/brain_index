@@ -1,6 +1,6 @@
 # ROADMAP001 — Embedded Vector Index for the Company Brain
 
-- **Status:** In progress
+- **Status:** Completed at `0.1.0` (2026-11-11)
 - **Target release:** `0.1.0` (internal, not published)
 - **Primary interface:** Elixir
 - **Native implementation:** Rust via Rustler (only dependency: `rustler`)

@@ -1,4 +1,5 @@
-//! BrainIndex native core. Design decisions live in `@meta/@adr`.
+//! BrainIndex native core. Design decisions live in `@meta/@adr`; this file is the NIF boundary
+//! (ADR006): decode inputs, take the lock, contain panics, encode tagged results.
 
 pub mod bitset;
 pub mod error;
@@ -13,6 +14,8 @@ use error::Error;
 use index::{Index, SearchOpts};
 use metric::Metric;
 use rustler::{Atom, Binary, Encoder, Env, ResourceArc, Term};
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::path::Path;
 use std::sync::RwLock;
 
 mod atoms {
@@ -36,6 +39,14 @@ type MetaPairs = Vec<(String, String)>;
 type FilterSpec = Vec<(String, Vec<String>)>;
 /// (k, ef, exact, brute_force_threshold)
 type SearchSpec = (usize, usize, bool, usize);
+/// (dim, metric, size, deleted, m, ef_construction)
+type InfoSpec = (usize, &'static str, usize, usize, usize, usize);
+
+/// Runs a NIF body, converting any panic into a tagged `internal` error.
+fn guard<T>(f: impl FnOnce() -> NifResult<T>) -> NifResult<T> {
+    catch_unwind(AssertUnwindSafe(f))
+        .unwrap_or_else(|_| Err(Error::new("internal", "native panic contained")))
+}
 
 /// Decodes a little-endian f32 binary.
 fn floats(bin: &Binary) -> NifResult<Vec<f32>> {
@@ -51,8 +62,20 @@ fn floats(bin: &Binary) -> NifResult<Vec<f32>> {
         .collect())
 }
 
-fn poisoned() -> Error {
-    Error::new("internal", "index lock poisoned")
+fn read(res: &IndexRes) -> NifResult<std::sync::RwLockReadGuard<'_, Index>> {
+    res.0
+        .read()
+        .map_err(|_| Error::new("internal", "index lock poisoned"))
+}
+
+fn write(res: &IndexRes) -> NifResult<std::sync::RwLockWriteGuard<'_, Index>> {
+    res.0
+        .write()
+        .map_err(|_| Error::new("internal", "index lock poisoned"))
+}
+
+fn wrap(idx: Index) -> ResourceArc<IndexRes> {
+    ResourceArc::new(IndexRes(RwLock::new(idx)))
 }
 
 #[rustler::nif]
@@ -67,23 +90,27 @@ fn new(
     m: usize,
     ef_construction: usize,
 ) -> NifResult<ResourceArc<IndexRes>> {
-    let params = hnsw::Params {
-        m,
-        ef_construction,
-        ..Default::default()
-    };
-    let idx = Index::with_params(dim, Metric::parse(&metric)?, params)?;
-    Ok(ResourceArc::new(IndexRes(RwLock::new(idx))))
+    guard(|| {
+        let params = hnsw::Params {
+            m,
+            ef_construction,
+            ..Default::default()
+        };
+        Ok(wrap(Index::with_params(
+            dim,
+            Metric::parse(&metric)?,
+            params,
+        )?))
+    })
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
 fn insert(res: ResourceArc<IndexRes>, id: u64, vector: Binary, meta: MetaPairs) -> NifResult<Atom> {
-    let v = floats(&vector)?;
-    res.0
-        .write()
-        .map_err(|_| poisoned())?
-        .insert(id, &v, meta)?;
-    Ok(atoms::ok())
+    guard(|| {
+        let v = floats(&vector)?;
+        write(&res)?.insert(id, &v, meta)?;
+        Ok(atoms::ok())
+    })
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
@@ -91,23 +118,16 @@ fn insert_many(
     res: ResourceArc<IndexRes>,
     items: Vec<(u64, Binary, MetaPairs)>,
 ) -> NifResult<Atom> {
-    let decoded = items
-        .into_iter()
-        .map(|(id, v, meta)| floats(&v).map(|v| (id, v, meta)))
-        .collect::<NifResult<Vec<_>>>()?;
-    res.0
-        .write()
-        .map_err(|_| poisoned())?
-        .insert_many(decoded)?;
-    Ok(atoms::ok())
+    guard(|| {
+        let decoded = items
+            .into_iter()
+            .map(|(id, v, meta)| floats(&v).map(|v| (id, v, meta)))
+            .collect::<NifResult<Vec<_>>>()?;
+        write(&res)?.insert_many(decoded)?;
+        Ok(atoms::ok())
+    })
 }
 
-#[rustler::nif]
-fn size(res: ResourceArc<IndexRes>) -> NifResult<usize> {
-    Ok(res.0.read().map_err(|_| poisoned())?.len())
-}
-
-/// opts: (k, ef, exact, brute_force_threshold)
 #[rustler::nif(schedule = "DirtyCpu")]
 fn search(
     res: ResourceArc<IndexRes>,
@@ -115,38 +135,66 @@ fn search(
     filter: FilterSpec,
     opts: SearchSpec,
 ) -> NifResult<Vec<(u64, f64)>> {
-    let q = floats(&query)?;
-    let (k, ef, exact, brute_force_threshold) = opts;
-    let o = SearchOpts {
-        k,
-        ef,
-        exact,
-        brute_force_threshold,
-    };
-    let idx = res.0.read().map_err(|_| poisoned())?;
-    Ok(idx
-        .search(&q, &filter, &o)?
-        .into_iter()
-        .map(|(id, d)| (id, d as f64))
-        .collect())
+    guard(|| {
+        let q = floats(&query)?;
+        let (k, ef, exact, brute_force_threshold) = opts;
+        let o = SearchOpts {
+            k,
+            ef,
+            exact,
+            brute_force_threshold,
+        };
+        let hits = read(&res)?.search(&q, &filter, &o)?;
+        Ok(hits.into_iter().map(|(id, d)| (id, d as f64)).collect())
+    })
 }
 
 #[rustler::nif]
 fn delete(res: ResourceArc<IndexRes>, id: u64) -> NifResult<bool> {
-    Ok(res.0.write().map_err(|_| poisoned())?.delete(id))
+    guard(|| Ok(write(&res)?.delete(id)))
+}
+
+#[rustler::nif]
+fn info(res: ResourceArc<IndexRes>) -> NifResult<InfoSpec> {
+    guard(|| {
+        let idx = read(&res)?;
+        let p = &idx.graph.params;
+        Ok((
+            idx.dim,
+            idx.metric.name(),
+            idx.len(),
+            idx.deleted(),
+            p.m,
+            p.ef_construction,
+        ))
+    })
 }
 
 #[rustler::nif(schedule = "DirtyIo")]
 fn save(res: ResourceArc<IndexRes>, path: String) -> NifResult<Atom> {
-    let idx = res.0.read().map_err(|_| poisoned())?;
-    snapshot::save(&idx, std::path::Path::new(&path))?;
-    Ok(atoms::ok())
+    guard(|| {
+        snapshot::save(&*read(&res)?, Path::new(&path))?;
+        Ok(atoms::ok())
+    })
 }
 
 #[rustler::nif(schedule = "DirtyIo")]
 fn load(path: String) -> NifResult<ResourceArc<IndexRes>> {
-    let idx = snapshot::load(std::path::Path::new(&path))?;
-    Ok(ResourceArc::new(IndexRes(RwLock::new(idx))))
+    guard(|| Ok(wrap(snapshot::load(Path::new(&path))?)))
 }
 
 rustler::init!("Elixir.BrainIndex.Native");
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn guard_contains_panics() {
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let r: NifResult<()> = guard(|| panic!("boom"));
+        std::panic::set_hook(prev);
+        assert_eq!(r.unwrap_err().reason, "internal");
+    }
+}
