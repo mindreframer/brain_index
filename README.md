@@ -31,6 +31,8 @@ BrainIndex.info(index)
 - **The data doesn't need to fit in RAM.** Searches read straight from the memory map, and the
   kernel keeps hot pages cached. In RAM: the page cache plus filter bitsets (1 bit per node per
   distinct metadata pair).
+- Many concurrent single writes? Use `BrainIndex.Writer` (group commit). It merges them into one
+  transaction, which means 12× fewer bytes written to the SSD than one commit per insert.
 - After a crash the index is exactly the last committed state. Recovery takes no time and there
   is nothing to replay. A `SIGKILL` test checks that every acknowledged write survives.
 
@@ -67,8 +69,8 @@ embedded with `multilingual-e5-base` and YARlabs `v5` (Lorentz).
 | HNSW top-10 overlap with exact search | ≥ 0.98 |
 | full test suite | about 1 s (Elixir) + about 0.5 s (Rust) |
 
-Performance (10k random 384-dimension vectors, Apple Silicon): HNSW p50 274 µs, filtered brute
-force p50 64 µs, build 3.5k vectors/s. See `bench/RESULTS.md`.
+Performance (10k × 384, durable, Apple Silicon): HNSW p50 about 1.1 ms, batched build 751 vectors/s
+with about 2× write amplification, reopen 2 ms. See `bench/RESULTS.md`.
 
 ## Development
 

@@ -82,6 +82,14 @@ one index:
 - Tombstones accumulate until compaction exists.
 - Filter postings stay in RAM (small: 1M nodes × 10 pairs is about 1.25 MiB).
 
+## Measured (bench/RESULTS.md, 10k × 384, Apple Silicon)
+
+- Batched build: about 2× write amplification (30 MiB written for 14.6 MiB of raw vectors).
+- A lone insert costs about 520 KB written (16 KiB pages × the B-tree paths of about 30 touched
+  link lists). Hence `BrainIndex.Writer` (group commit): 43 KB per insert with 50 concurrent
+  callers.
+- Search p50 is about 1.1–1.4 ms (in-memory engine: 0.27 ms). Cold reopen takes 2 ms.
+
 ## Alternatives Considered
 
 - **WAL plus checkpoints (ADR007).** Rejected: periodic full rewrites and RAM residency.

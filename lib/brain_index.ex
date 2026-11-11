@@ -114,6 +114,12 @@ defmodule BrainIndex do
   """
   @spec insert_many(t(), [item()]) :: :ok | {:error, Error.t()}
   def insert_many(index, items) when is_list(items) do
+    with {:ok, encoded} <- prepare_items(items), do: write_prepared(index, encoded)
+  end
+
+  @doc false
+  # Validates and encodes items in the caller's process; used by `BrainIndex.Writer`.
+  def prepare_items(items) do
     items
     |> Enum.with_index()
     |> Enum.reduce_while({:ok, []}, fn {item, i}, {:ok, acc} ->
@@ -123,10 +129,13 @@ defmodule BrainIndex do
       end
     end)
     |> case do
-      {:ok, encoded} -> Error.wrap(Native.insert_many(index, Enum.reverse(encoded)))
+      {:ok, encoded} -> {:ok, Enum.reverse(encoded)}
       error -> error
     end
   end
+
+  @doc false
+  def write_prepared(index, encoded), do: Error.wrap(Native.insert_many(index, encoded))
 
   @doc """
   Returns up to `k` nearest vectors as `{id, distance}`, ascending by distance.

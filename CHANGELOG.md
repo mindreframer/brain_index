@@ -7,6 +7,7 @@
 - `BrainIndex.open/2` (idempotent per directory), `new/1` = temporary index.
 - Payloads stored atomically with vectors (ADR010): `insert/5`, `search(payload: true)`, `get_payload/2`.
 - `backup/2`: consistent compacted online copy.
+- `BrainIndex.Writer`: group commit for concurrent writers (12× fewer SSD bytes per insert).
 - Unaligned SIMD kernels reading straight from the memory map.
 
 ## 0.2.0 — 2026-11-11
