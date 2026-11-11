@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0 — 2026-11-11
+
+- `BrainIndex.Collection`: durable, supervised index with a write-ahead log (ADR007).
+- `BrainIndex.Storage` behaviour with `Storage.File` (segments, CRC, torn-tail repair, checkpoints)
+  and `Storage.Memory` (tests).
+- `BrainIndex.to_binary/1` and `from_binary/1`; snapshots fsync their directory.
+
 ## 0.1.0 — 2026-11-11
 
 First internal release (ROADMAP001).

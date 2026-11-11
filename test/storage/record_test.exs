@@ -12,8 +12,9 @@ defmodule BrainIndex.Storage.RecordTest do
   test "truncation and bit flips stop decoding at the bad record" do
     [a, b] = Enum.map(@records, &Record.frame/1)
     good = byte_size(a)
+    skip = good + 10
     assert {[_], {:error, ^good}} = Record.decode(a <> binary_part(b, 0, byte_size(b) - 1))
-    <<head::binary-size(good + 10), x, rest::binary>> = a <> b
+    <<head::binary-size(^skip), x, rest::binary>> = a <> b
 
     assert {[_], {:error, ^good}} =
              Record.decode(<<head::binary, Bitwise.bxor(x, 1), rest::binary>>)

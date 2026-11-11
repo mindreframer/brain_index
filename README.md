@@ -22,13 +22,37 @@ BrainIndex.info(index)
 # => %{dim: 768, metric: :cosine, size: 1, deleted: 1, m: 16, ef_construction: 200}
 ```
 
+## Durable collections (write-ahead log)
+
+For data that must survive crashes, run a supervised `BrainIndex.Collection`. Configure it once:
+
+```elixir
+children = [
+  {BrainIndex.Collection,
+   name: :brain, dim: 768, storage: {BrainIndex.Storage.File, dir: "/var/lib/brain"}}
+]
+
+:ok = BrainIndex.Collection.upsert_many(:brain, [{1, embedding, %{"kind" => "kb"}}])  # durable on return
+{:ok, hits} = BrainIndex.Collection.search(:brain, query, 5, filter: %{"kind" => "kb"})
+```
+
+- Each write is applied, appended to a CRC-framed log, synced to disk with `datasync`, and only
+  then acknowledged. Batches (`upsert_many`) cost one sync.
+- Searches never wait for the collection process.
+- Checkpoints run automatically when the log passes 256 MiB. Old segments and checkpoints are
+  deleted.
+- Recovery runs automatically on start: newest checkpoint plus log replay. A record torn by a
+  crash is repaired; real corruption fails loudly.
+- For tests, use `{BrainIndex.Storage.Memory, agent: agent}`. To build your own backend,
+  implement `BrainIndex.Storage`.
+
 ## What it does, and what it doesn't
 
 | BrainIndex owns | Your application owns |
 |---|---|
 | vectors, HNSW search, exact metadata filters | embeddings (e.g. Bumblebee + multilingual-e5) |
 | upsert / delete | documents, chunk text, payloads |
-| atomic snapshots (`save` / `load`) | the system of record, replays after a crash |
+| write-ahead log, checkpoints, crash recovery | the system of record (documents) |
 | concurrency-safe access from any process | retrieval policy per agent, multi-node distribution |
 
 - **Metrics:** `:cosine` (normalised; distance `1 - cos`) and `:lorentz` (hyperbolic, time component
@@ -41,8 +65,9 @@ BrainIndex.info(index)
   `insert_many`. Heavy calls run on dirty schedulers.
 - **Errors:** always `{:error, %BrainIndex.Error{reason: atom}}`. A native panic becomes
   `:internal` and never crashes the VM.
-- **Persistence:** explicit snapshots only. There's no WAL. The index is derived data, so rebuild
-  it or reload it from your system of record.
+- **Persistence:** `BrainIndex.Collection` with a write-ahead log (ADR007), or manual `save` /
+  `load` snapshots for plain indexes. Quantization, S3 shipping and replication are deferred, with
+  a design path in ADR008.
 
 ## Quality
 
@@ -69,5 +94,5 @@ MIX_ENV=prod mix run bench/bench.exs    # benchmark
 Requires Elixir ≥ 1.18 and Rust 1.91 (pinned in `rust-toolchain.toml`). The only dependency is
 `rustler`, in both Elixir and Rust.
 
-Design decisions are in `@meta/@adr` (ADR001–ADR006). The roadmap is in `@meta/@pm`. Read
+Design decisions are in `@meta/@adr` (ADR001–ADR008). The roadmap is in `@meta/@pm`. Read
 `AGENTS.md` before changing anything.
