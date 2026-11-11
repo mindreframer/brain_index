@@ -1,0 +1,15 @@
+[package]
+name = "brain_index_nif"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+rustler = "=0.38.0"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"

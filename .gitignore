@@ -1,0 +1,9 @@
+/_build/
+/deps/
+/doc/
+/priv/native/
+/native/brain_index_nif/target/
+erl_crash.dump
+*.ez
+.DS_Store
+/tmp/
