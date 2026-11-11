@@ -1,6 +1,6 @@
 # ROADMAP002 — Durable Collections (Write-Ahead Log) and Demo Application
 
-- **Status:** In progress
+- **Status:** Completed at `0.2.0` (2026-11-11)
 - **Target release:** `0.2.0` (internal)
 - **ADRs:** ADR007 (WAL), ADR008 (deferred: quantization, S3, replication)
 
