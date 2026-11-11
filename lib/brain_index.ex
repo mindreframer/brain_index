@@ -10,12 +10,19 @@ defmodule BrainIndex do
   @type vector :: [number()] | binary()
   @type hit :: {id(), float()}
 
-  @doc "Creates an empty index. Options: `:dim` (required), `:metric` (`:cosine` | `:lorentz`)."
+  @doc """
+  Creates an empty index.
+
+  Options: `:dim` (required), `:metric` (`:cosine` | `:lorentz`, default `:cosine`),
+  `:m` (graph degree, default 16), `:ef_construction` (build beam width, default 200).
+  """
   @spec new(keyword()) :: {:ok, t()} | {:error, Error.t()}
   def new(opts) do
     dim = Keyword.fetch!(opts, :dim)
     metric = Keyword.get(opts, :metric, :cosine)
-    Error.wrap(Native.new(dim, Atom.to_string(metric)))
+    m = Keyword.get(opts, :m, 16)
+    ef_construction = Keyword.get(opts, :ef_construction, 200)
+    Error.wrap(Native.new(dim, Atom.to_string(metric), m, ef_construction))
   end
 
   @doc "Inserts a vector under `id`."
@@ -29,10 +36,18 @@ defmodule BrainIndex do
     n
   end
 
-  @doc "Returns the `k` nearest vectors as `{id, distance}`, ascending by distance."
+  @doc """
+  Returns the `k` nearest vectors as `{id, distance}`, ascending by distance.
+
+  Options: `:ef` (search beam width, default `max(100, 2 * k)`), `:exact` (brute force, default false).
+  """
   @spec search(t(), vector(), pos_integer(), keyword()) :: {:ok, [hit()]} | {:error, Error.t()}
-  def search(index, query, k, _opts \\ []) do
-    Error.wrap(Native.exact_search(index, encode(query), k))
+  def search(index, query, k, opts \\ []) do
+    if Keyword.get(opts, :exact, false) do
+      Error.wrap(Native.exact_search(index, encode(query), k))
+    else
+      Error.wrap(Native.search(index, encode(query), k, Keyword.get(opts, :ef, max(100, 2 * k))))
+    end
   end
 
   @doc false

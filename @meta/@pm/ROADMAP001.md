@@ -45,7 +45,8 @@ See the ADRs for the reasons.
 ## 4. Quality Bar
 
 - Oracle acceptance: with the spike fixtures, e5 R@5 ≥ 0.86 filtered and
-  ≥ 0.75 plain. v5 Lorentz R@5 ≥ 0.80 filtered and ≥ 0.66 plain.
+  ≥ 0.75 plain (exact: 0.76). v5 Lorentz R@5 ≥ 0.80 filtered and ≥ 0.66
+  plain (exact: 0.673). With default `ef`, HNSW must equal exact recall.
 - HNSW top-10 recall versus brute force ≥ 0.98 on fixtures.
 - The full test suite (Elixir + Rust) runs in under 10 s after compilation.
 - No warnings: `mix compile --warnings-as-errors`, `cargo clippy -D warnings`,

@@ -1,6 +1,7 @@
 //! The index: vector arena, id mapping and search entry points.
 
 use crate::error::{Error, Result};
+use crate::hnsw::{Graph, Params};
 use crate::metric::Metric;
 use crate::topk::{Scored, TopK};
 use std::collections::HashMap;
@@ -14,12 +15,22 @@ pub struct Index {
     pub(crate) ext_ids: Vec<u64>,
     /// External id -> internal id (live nodes only).
     pub(crate) by_ext: HashMap<u64, u32>,
+    pub(crate) graph: Graph,
 }
 
 impl Index {
     pub fn new(dim: usize, metric: Metric) -> Result<Self> {
+        Self::with_params(dim, metric, Params::default())
+    }
+
+    pub fn with_params(dim: usize, metric: Metric, params: Params) -> Result<Self> {
         if dim == 0 || dim > 65_536 {
             return Err(Error::invalid_argument("dim must be in 1..=65536"));
+        }
+        if !(2..=256).contains(&params.m) || params.ef_construction < 1 {
+            return Err(Error::invalid_argument(
+                "m must be in 2..=256 and ef_construction >= 1",
+            ));
         }
         Ok(Self {
             dim,
@@ -27,6 +38,7 @@ impl Index {
             vectors: Vec::new(),
             ext_ids: Vec::new(),
             by_ext: HashMap::new(),
+            graph: Graph::new(params),
         })
     }
 
@@ -63,7 +75,14 @@ impl Index {
         self.vectors.extend_from_slice(&v);
         self.ext_ids.push(ext_id);
         self.by_ext.insert(ext_id, node);
+        self.graph_insert(node);
         Ok(())
+    }
+
+    /// Approximate k-NN via HNSW.
+    pub fn search(&self, q: &[f32], k: usize, ef: usize) -> Result<Vec<(u64, f32)>> {
+        let q = self.prepare(q)?;
+        Ok(self.to_external(self.hnsw_search(&q, k, ef, &|_| true)))
     }
 
     /// Exact search over all live nodes accepted by `allow`.
