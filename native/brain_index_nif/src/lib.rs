@@ -13,7 +13,7 @@ pub mod topk;
 use error::Error;
 use index::{Index, SearchOpts};
 use metric::Metric;
-use rustler::{Atom, Binary, Encoder, Env, ResourceArc, Term};
+use rustler::{Atom, Binary, Encoder, Env, NewBinary, ResourceArc, Term};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
 use std::sync::RwLock;
@@ -181,6 +181,30 @@ fn save(res: ResourceArc<IndexRes>, path: String) -> NifResult<Atom> {
 #[rustler::nif(schedule = "DirtyIo")]
 fn load(path: String) -> NifResult<ResourceArc<IndexRes>> {
     guard(|| Ok(wrap(snapshot::load(Path::new(&path))?)))
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn to_binary<'a>(env: Env<'a>, res: ResourceArc<IndexRes>) -> NifResult<Binary<'a>> {
+    guard(|| {
+        let bytes = snapshot::encode(&*read(&res)?);
+        let mut out = NewBinary::new(env, bytes.len());
+        out.as_mut_slice().copy_from_slice(&bytes);
+        Ok(out.into())
+    })
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn from_binary(bytes: Binary) -> NifResult<ResourceArc<IndexRes>> {
+    guard(|| Ok(wrap(snapshot::decode(bytes.as_slice())?)))
+}
+
+/// Makes directory entries (new files, renames) durable.
+#[rustler::nif(schedule = "DirtyIo")]
+fn fsync_dir(path: String) -> NifResult<Atom> {
+    guard(|| {
+        snapshot::fsync_dir(Path::new(&path))?;
+        Ok(atoms::ok())
+    })
 }
 
 rustler::init!("Elixir.BrainIndex.Native");

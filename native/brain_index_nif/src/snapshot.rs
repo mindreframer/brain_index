@@ -98,7 +98,19 @@ pub fn save(idx: &Index, path: &Path) -> Result<()> {
     f.write_all(&bytes).map_err(io)?;
     f.sync_all().map_err(io)?;
     drop(f);
-    std::fs::rename(&tmp, path).map_err(io)
+    std::fs::rename(&tmp, path).map_err(io)?;
+    fsync_dir(path.parent().unwrap_or(Path::new(".")))
+}
+
+pub fn fsync_dir(dir: &Path) -> Result<()> {
+    let dir = if dir.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        dir
+    };
+    std::fs::File::open(dir)
+        .and_then(|d| d.sync_all())
+        .map_err(io)
 }
 
 // ---------- decoding ----------

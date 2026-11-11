@@ -11,6 +11,9 @@ defmodule BrainIndex.Native do
   def info(_index), do: err()
   def save(_index, _path), do: err()
   def load(_path), do: err()
+  def to_binary(_index), do: err()
+  def from_binary(_bytes), do: err()
+  def fsync_dir(_path), do: err()
 
   defp err, do: :erlang.nif_error(:nif_not_loaded)
 end

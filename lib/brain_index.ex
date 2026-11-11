@@ -169,6 +169,14 @@ defmodule BrainIndex do
   @spec load(Path.t()) :: {:ok, t()} | {:error, Error.t()}
   def load(path), do: Error.wrap(Native.load(to_string(path)))
 
+  @doc "Serialises the whole index to a binary (same format as `save/2`)."
+  @spec to_binary(t()) :: {:ok, binary()} | {:error, Error.t()}
+  def to_binary(index), do: Error.wrap(Native.to_binary(index))
+
+  @doc "Restores an index from `to_binary/1` output."
+  @spec from_binary(binary()) :: {:ok, t()} | {:error, Error.t()}
+  def from_binary(bytes) when is_binary(bytes), do: Error.wrap(Native.from_binary(bytes))
+
   @doc "Encodes a list of numbers as a little-endian f32 binary (the fastest vector input)."
   @spec encode(vector()) :: binary()
   def encode(vector) when is_binary(vector), do: vector
