@@ -32,6 +32,10 @@ impl Encoder for Error {
 }
 
 type NifResult<T> = Result<T, Error>;
+type MetaPairs = Vec<(String, String)>;
+type FilterSpec = Vec<(String, Vec<String>)>;
+/// (k, ef, exact, brute_force_threshold)
+type SearchSpec = (usize, usize, bool, usize);
 
 /// Decodes a little-endian f32 binary.
 fn floats(bin: &Binary) -> NifResult<Vec<f32>> {
@@ -72,18 +76,29 @@ fn new(
     Ok(ResourceArc::new(IndexRes(RwLock::new(idx))))
 }
 
-#[rustler::nif]
-fn insert(
-    res: ResourceArc<IndexRes>,
-    id: u64,
-    vector: Binary,
-    meta: Vec<(String, String)>,
-) -> NifResult<Atom> {
+#[rustler::nif(schedule = "DirtyCpu")]
+fn insert(res: ResourceArc<IndexRes>, id: u64, vector: Binary, meta: MetaPairs) -> NifResult<Atom> {
     let v = floats(&vector)?;
     res.0
         .write()
         .map_err(|_| poisoned())?
         .insert(id, &v, meta)?;
+    Ok(atoms::ok())
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn insert_many(
+    res: ResourceArc<IndexRes>,
+    items: Vec<(u64, Binary, MetaPairs)>,
+) -> NifResult<Atom> {
+    let decoded = items
+        .into_iter()
+        .map(|(id, v, meta)| floats(&v).map(|v| (id, v, meta)))
+        .collect::<NifResult<Vec<_>>>()?;
+    res.0
+        .write()
+        .map_err(|_| poisoned())?
+        .insert_many(decoded)?;
     Ok(atoms::ok())
 }
 
@@ -97,8 +112,8 @@ fn size(res: ResourceArc<IndexRes>) -> NifResult<usize> {
 fn search(
     res: ResourceArc<IndexRes>,
     query: Binary,
-    filter: Vec<(String, Vec<String>)>,
-    opts: (usize, usize, bool, usize),
+    filter: FilterSpec,
+    opts: SearchSpec,
 ) -> NifResult<Vec<(u64, f64)>> {
     let q = floats(&query)?;
     let (k, ef, exact, brute_force_threshold) = opts;

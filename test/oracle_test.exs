@@ -11,10 +11,12 @@ for model <- [:e5, :v5] do
     setup_all do
       {:ok, index} = BrainIndex.new(dim: Fixtures.dim(@model), metric: Fixtures.metric(@model))
 
-      Enum.zip(Fixtures.chunks(), Fixtures.vectors(@model, :chunks))
-      |> Enum.each(fn {c, v} ->
-        :ok = BrainIndex.insert(index, c.id, v, %{"kind" => c.kind, "lang" => c.lang})
-      end)
+      items =
+        Enum.zip_with(Fixtures.chunks(), Fixtures.vectors(@model, :chunks), fn c, v ->
+          {c.id, v, %{"kind" => c.kind, "lang" => c.lang}}
+        end)
+
+      :ok = BrainIndex.insert_many(index, items)
 
       %{index: index, queries: Fixtures.vectors(@model, :queries)}
     end

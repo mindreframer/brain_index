@@ -116,6 +116,23 @@ impl Index {
         Ok(())
     }
 
+    /// Inserts a batch. Every vector is validated first, so a bad item leaves the index unchanged.
+    pub fn insert_many(&mut self, items: Vec<(u64, Vec<f32>, Meta)>) -> Result<()> {
+        let prepared = items
+            .into_iter()
+            .enumerate()
+            .map(|(i, (id, v, meta))| {
+                self.prepare(&v)
+                    .map(|v| (id, v, meta))
+                    .map_err(|e| Error::new(e.reason, format!("item {i}: {}", e.message)))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        for (id, v, meta) in prepared {
+            self.insert(id, &v, meta)?;
+        }
+        Ok(())
+    }
+
     /// Tombstones `ext_id`: the node keeps routing searches but never matches. Returns whether it existed.
     pub fn delete(&mut self, ext_id: u64) -> bool {
         let Some(node) = self.by_ext.remove(&ext_id) else {
@@ -317,6 +334,24 @@ pub(crate) mod tests {
             .unwrap()
             .is_empty());
         assert_eq!((i.len(), i.deleted()), (2, 2));
+    }
+
+    #[test]
+    fn insert_many_is_all_or_nothing_on_invalid_input() {
+        let mut i = idx();
+        let bad = vec![(1, vec![1.0, 0.0], vec![]), (2, vec![0.0, 0.0], vec![])];
+        let err = i.insert_many(bad).unwrap_err();
+        assert_eq!(
+            (err.reason, err.message.starts_with("item 1")),
+            ("invalid_vector", true)
+        );
+        assert_eq!(i.len(), 3);
+        i.insert_many(vec![
+            (1, vec![1.0, 0.0], vec![]),
+            (2, vec![0.5, 0.5], vec![]),
+        ])
+        .unwrap();
+        assert_eq!(i.len(), 5);
     }
 
     #[test]

@@ -34,6 +34,24 @@ defmodule BrainIndex do
     Error.wrap(Native.insert(index, id, encode(vector), encode_meta(meta)))
   end
 
+  @doc """
+  Inserts many `{id, vector}` or `{id, vector, meta}` items under one write lock.
+
+  All vectors are validated before any is inserted. Binary vectors (little-endian f32)
+  are the fastest input format.
+  """
+  @spec insert_many(t(), [{id(), vector()} | {id(), vector(), meta()}]) ::
+          :ok | {:error, Error.t()}
+  def insert_many(index, items) do
+    items =
+      Enum.map(items, fn
+        {id, vector} -> {id, encode(vector), []}
+        {id, vector, meta} -> {id, encode(vector), encode_meta(meta)}
+      end)
+
+    Error.wrap(Native.insert_many(index, items))
+  end
+
   @doc "Deletes `id`. Returns `{:ok, true}` if it existed."
   @spec delete(t(), id()) :: {:ok, boolean()} | {:error, Error.t()}
   def delete(index, id), do: Error.wrap(Native.delete(index, id))
